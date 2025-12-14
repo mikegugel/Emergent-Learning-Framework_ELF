@@ -16,9 +16,15 @@ async def get_stats():
 
         stats = {}
 
-        # Counts
+        # Counts - Use building_queries as primary "runs" metric (fallback to workflow_runs)
         cursor.execute("SELECT COUNT(*) FROM workflow_runs")
-        stats["total_runs"] = cursor.fetchone()[0]
+        workflow_runs_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM building_queries")
+        query_runs_count = cursor.fetchone()[0]
+
+        # Use whichever has data (prefer queries as they're more common)
+        stats["total_runs"] = query_runs_count if query_runs_count > 0 else workflow_runs_count
 
         cursor.execute("SELECT COUNT(*) FROM node_executions")
         stats["total_executions"] = cursor.fetchone()[0]
@@ -65,12 +71,19 @@ async def get_stats():
             stats["avg_spike_usefulness"] = 0
             stats["total_spike_time_invested"] = 0
 
-        # Get actual run success/failure counts from workflow_runs status
-        cursor.execute("SELECT COUNT(*) FROM workflow_runs WHERE status = 'completed'")
-        stats["successful_runs"] = cursor.fetchone()[0]
+        # Get run success/failure counts - use building_queries if available, else workflow_runs
+        if query_runs_count > 0:
+            cursor.execute("SELECT COUNT(*) FROM building_queries WHERE status = 'success'")
+            stats["successful_runs"] = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM workflow_runs WHERE status IN ('failed', 'cancelled')")
-        stats["failed_runs"] = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM building_queries WHERE status IN ('error', 'timeout')")
+            stats["failed_runs"] = cursor.fetchone()[0]
+        else:
+            cursor.execute("SELECT COUNT(*) FROM workflow_runs WHERE status = 'completed'")
+            stats["successful_runs"] = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM workflow_runs WHERE status IN ('failed', 'cancelled')")
+            stats["failed_runs"] = cursor.fetchone()[0]
 
         # Averages
         cursor.execute("SELECT AVG(confidence) FROM heuristics")

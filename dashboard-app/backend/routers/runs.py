@@ -225,50 +225,92 @@ async def retry_run(run_id: int) -> ActionResult:
 
 @router.get("/hotspots")
 async def get_hotspots(days: int = 7, limit: int = 50):
-    """Get trail hot spots aggregated by location."""
+    """Get hot spots aggregated by location (trails) or query type (building_queries fallback)."""
     with get_db() as conn:
         cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT
-                location,
-                COUNT(*) as trail_count,
-                SUM(strength) as total_strength,
-                GROUP_CONCAT(DISTINCT scent) as scents,
-                GROUP_CONCAT(DISTINCT agent_id) as agents,
-                MAX(created_at) as last_activity,
-                MIN(created_at) as first_activity
-            FROM trails
-            WHERE created_at > datetime('now', ?)
-            GROUP BY location
-            ORDER BY total_strength DESC
-            LIMIT ?
-        """, (f'-{days} days', limit))
+        # Check if trails has data
+        cursor.execute("SELECT COUNT(*) FROM trails WHERE created_at > datetime('now', ?)", (f'-{days} days',))
+        trails_count = cursor.fetchone()[0]
 
         hotspots = []
-        for row in cursor.fetchall():
-            hs = dict_from_row(row)
-            hs["scents"] = hs["scents"].split(",") if hs["scents"] else []
-            hs["agents"] = hs["agents"].split(",") if hs["agents"] else []
-            hs["agent_count"] = len(set(hs["agents"]))
 
-            # Get related heuristics
-            location_lower = hs["location"].lower()
-            filename = location_lower.split("/")[-1].split("\\")[-1]
-            base_name = filename.rsplit(".", 1)[0] if "." in filename else filename
-
-            # Escape SQL wildcards to prevent wildcard injection
-            base_name_escaped = escape_like(base_name)
+        if trails_count > 0:
+            # Use trails data
             cursor.execute("""
-                SELECT id, rule, confidence, domain
-                FROM heuristics
-                WHERE LOWER(rule) LIKE ? OR LOWER(domain) LIKE ?
-                ORDER BY confidence DESC
-                LIMIT 3
-            """, (f'%{base_name_escaped}%', f'%{base_name_escaped}%'))
-            hs["related_heuristics"] = [dict_from_row(r) for r in cursor.fetchall()]
+                SELECT
+                    location,
+                    COUNT(*) as trail_count,
+                    SUM(strength) as total_strength,
+                    GROUP_CONCAT(DISTINCT scent) as scents,
+                    GROUP_CONCAT(DISTINCT agent_id) as agents,
+                    MAX(created_at) as last_activity,
+                    MIN(created_at) as first_activity
+                FROM trails
+                WHERE created_at > datetime('now', ?)
+                GROUP BY location
+                ORDER BY total_strength DESC
+                LIMIT ?
+            """, (f'-{days} days', limit))
 
-            hotspots.append(hs)
+            for row in cursor.fetchall():
+                hs = dict_from_row(row)
+                hs["scents"] = hs["scents"].split(",") if hs["scents"] else []
+                hs["agents"] = hs["agents"].split(",") if hs["agents"] else []
+                hs["agent_count"] = len(set(hs["agents"]))
+
+                # Get related heuristics
+                location_lower = hs["location"].lower()
+                filename = location_lower.split("/")[-1].split("\\")[-1]
+                base_name = filename.rsplit(".", 1)[0] if "." in filename else filename
+
+                base_name_escaped = escape_like(base_name)
+                cursor.execute("""
+                    SELECT id, rule, confidence, domain
+                    FROM heuristics
+                    WHERE LOWER(rule) LIKE ? OR LOWER(domain) LIKE ?
+                    ORDER BY confidence DESC
+                    LIMIT 3
+                """, (f'%{base_name_escaped}%', f'%{base_name_escaped}%'))
+                hs["related_heuristics"] = [dict_from_row(r) for r in cursor.fetchall()]
+
+                hotspots.append(hs)
+        else:
+            # Fallback to building_queries grouped by query_type
+            cursor.execute("""
+                SELECT
+                    query_type as location,
+                    COUNT(*) as trail_count,
+                    COUNT(*) as total_strength,
+                    GROUP_CONCAT(DISTINCT status) as scents,
+                    GROUP_CONCAT(DISTINCT session_id) as agents,
+                    MAX(created_at) as last_activity,
+                    MIN(created_at) as first_activity
+                FROM building_queries
+                WHERE created_at > datetime('now', ?)
+                GROUP BY query_type
+                ORDER BY trail_count DESC
+                LIMIT ?
+            """, (f'-{days} days', limit))
+
+            for row in cursor.fetchall():
+                hs = dict_from_row(row)
+                hs["scents"] = hs["scents"].split(",") if hs["scents"] else []
+                hs["agents"] = hs["agents"].split(",") if hs["agents"] else []
+                hs["agent_count"] = len(set(a for a in hs["agents"] if a))
+
+                # Get related heuristics by domain matching query_type
+                query_type = hs["location"] or ""
+                cursor.execute("""
+                    SELECT id, rule, confidence, domain
+                    FROM heuristics
+                    WHERE LOWER(domain) LIKE ?
+                    ORDER BY confidence DESC
+                    LIMIT 3
+                """, (f'%{query_type.lower()}%',))
+                hs["related_heuristics"] = [dict_from_row(r) for r in cursor.fetchall()]
+
+                hotspots.append(hs)
 
         return hotspots
 

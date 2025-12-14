@@ -805,6 +805,160 @@ class QuerySystem:
                 ON invariants(severity)
             """)
 
+            # Create building_queries table (query logging/telemetry)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS building_queries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query_type TEXT NOT NULL,
+                    session_id TEXT,
+                    agent_id TEXT,
+                    domain TEXT,
+                    tags TEXT,
+                    limit_requested INTEGER,
+                    max_tokens_requested INTEGER,
+                    results_returned INTEGER DEFAULT 0,
+                    tokens_approximated INTEGER,
+                    duration_ms INTEGER,
+                    status TEXT DEFAULT 'success',
+                    error_message TEXT,
+                    error_code TEXT,
+                    golden_rules_returned INTEGER DEFAULT 0,
+                    heuristics_count INTEGER DEFAULT 0,
+                    learnings_count INTEGER DEFAULT 0,
+                    experiments_count INTEGER DEFAULT 0,
+                    ceo_reviews_count INTEGER DEFAULT 0,
+                    query_summary TEXT,
+                    completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_building_queries_type
+                ON building_queries(query_type)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_building_queries_created
+                ON building_queries(created_at DESC)
+            """)
+
+            # Create workflow_runs table (conductor workflow executions)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS workflow_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workflow_id INTEGER,
+                    workflow_name TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    phase TEXT,
+                    input_json TEXT,
+                    total_nodes INTEGER DEFAULT 0,
+                    completed_nodes INTEGER DEFAULT 0,
+                    failed_nodes INTEGER DEFAULT 0,
+                    started_at DATETIME,
+                    completed_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
+                ON workflow_runs(status)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_workflow_runs_created
+                ON workflow_runs(created_at DESC)
+            """)
+
+            # Create node_executions table (individual node runs within workflows)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS node_executions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER,
+                    node_id TEXT,
+                    node_name TEXT NOT NULL,
+                    node_type TEXT,
+                    agent_id TEXT,
+                    session_id TEXT,
+                    prompt TEXT,
+                    prompt_hash TEXT,
+                    status TEXT DEFAULT 'pending',
+                    result_json TEXT DEFAULT '{}',
+                    result_text TEXT,
+                    output TEXT,
+                    findings_json TEXT DEFAULT '[]',
+                    files_modified TEXT DEFAULT '[]',
+                    duration_ms INTEGER,
+                    token_count INTEGER,
+                    retry_count INTEGER DEFAULT 0,
+                    error_message TEXT,
+                    error_type TEXT,
+                    started_at DATETIME,
+                    completed_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (run_id) REFERENCES workflow_runs(id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_node_executions_run
+                ON node_executions(run_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_node_executions_status
+                ON node_executions(status)
+            """)
+
+            # Create trails table (pheromone trails for swarm intelligence)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trails (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER,
+                    location TEXT NOT NULL,
+                    location_type TEXT DEFAULT 'file',
+                    scent TEXT,
+                    strength REAL DEFAULT 1.0,
+                    agent_id TEXT,
+                    node_id TEXT,
+                    message TEXT,
+                    tags TEXT,
+                    expires_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (run_id) REFERENCES workflow_runs(id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_trails_run
+                ON trails(run_id)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_trails_location
+                ON trails(location)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_trails_created
+                ON trails(created_at DESC)
+            """)
+
+            # Create conductor_decisions table (workflow decision audit log)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS conductor_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER,
+                    decision_type TEXT NOT NULL,
+                    decision_data TEXT,
+                    reason TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (run_id) REFERENCES workflow_runs(id)
+                )
+            """)
+
             # Update query planner statistics
             cursor.execute("ANALYZE")
 
